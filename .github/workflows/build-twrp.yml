@@ -130,45 +130,92 @@ jobs:
           echo "=== Device tree contents ==="
           ls -la device/xiaomi/$DEVICE/
 
-      - name: Detect release configuration
+      - name: Detect release config & lunch target
+        id: detect
         run: |
           cd ~/twrp
-          echo "=== Detecting available release configurations ==="
+          echo "=== Detecting release configuration ==="
 
-          # Check for release configs in build/release_config
-          echo "--- build/release_config contents ---"
-          ls -la build/release_config/ 2>/dev/null || echo "No build/release_config dir"
-
-          # Check for release configs in vendor
-          echo "--- Looking for release configs ---"
-          find . -path "*/release_config*" -name "*.textproto" 2>/dev/null | head -20
-
-          # Check available products
-          echo "--- Checking envsetup.sh lunch function ---"
+          # Source build env to make functions available
           source build/envsetup.sh 2>/dev/null
 
-          # Try to find valid release names
-          echo "--- Checking build/make/core/release_config.mk ---"
-          cat build/make/core/release_config.mk 2>/dev/null | head -30 || echo "File not found"
+          # Find available release configs from build/release/flag_values/
+          RELEASE_CONFIGS=()
+          if [ -d "build/release/flag_values" ]; then
+            echo "Found build/release/flag_values/"
+            for f in build/release/flag_values/*.textproto; do
+              if [ -f "$f" ]; then
+                name=$(basename "$f" .textproto)
+                RELEASE_CONFIGS+=("$name")
+                echo "  Found release config: $name"
+              fi
+            done
+          fi
 
-          # Check for AP release configs
-          echo "--- Looking for AP release configs ---"
-          find build/release_config -name "*.textproto" 2>/dev/null | head -20
+          # Also check build/release_config/
+          if [ -d "build/release_config" ]; then
+            echo "Found build/release_config/"
+            for f in build/release_config/*.textproto; do
+              if [ -f "$f" ]; then
+                name=$(basename "$f" .textproto)
+                RELEASE_CONFIGS+=("$name")
+                echo "  Found release config: $name"
+              fi
+            done
+          fi
 
-          # Check vendor/xiaomi for release configs
-          echo "--- Checking vendor/xiaomi ---"
-          find vendor/xiaomi -name "*release*" -o -name "*config*" 2>/dev/null | head -20
+          # If no configs found, try common Android 14 names
+          if [ ${#RELEASE_CONFIGS[@]} -eq 0 ]; then
+            echo "No release configs found in expected dirs, trying defaults..."
+            RELEASE_CONFIGS=("ap3a" "ap2a" "ap1a")
+          fi
 
-          # Try to list all lunch combos
-          echo "--- Attempting to list products ---"
-          TWRP_PRODUCT=$(grep -r "PRODUCT_DEVICE\s*:=\s*$DEVICE" device/ 2>/dev/null | head -1 | cut -d: -f1)
-          echo "Device tree for $DEVICE: $TWRP_PRODUCT"
+          echo "Available release configs: ${RELEASE_CONFIGS[*]}"
 
-          # Find the product name
-          if [ -n "$TWRP_PRODUCT" ]; then
-            TWRP_DIR=$(dirname "$TWRP_PRODUCT")
-            echo "TWRP device dir: $TWRP_DIR"
-            cat "$TWRP_DIR/AndroidProducts.mk" 2>/dev/null
+          # Find the product name from device tree
+          PRODUCT_NAME=$(grep -r "PRODUCT_NAME\s*:=\s*" device/xiaomi/$DEVICE/*.mk 2>/dev/null | head -1 | sed 's/.*PRODUCT_NAME\s*:=\s*//' | tr -d ' ')
+          echo "Product name: $PRODUCT_NAME"
+
+          # Try each release config with lunch
+          LUNCH_TARGET=""
+          for RELEASE in "${RELEASE_CONFIGS[@]}"; do
+            TARGET="${PRODUCT_NAME}-${RELEASE}-userdebug"
+            echo "Testing: lunch $TARGET"
+            if lunch "$TARGET" 2>&1; then
+              LUNCH_TARGET="$TARGET"
+              echo "=== SUCCESS: $TARGET ==="
+              break
+            fi
+          done
+
+          # If three-part format failed, try setting TARGET_RELEASE
+          if [ -z "$LUNCH_TARGET" ]; then
+            echo "=== Three-part format failed, trying TARGET_RELEASE ==="
+            for RELEASE in "${RELEASE_CONFIGS[@]}"; do
+              export TARGET_RELEASE="$RELEASE"
+              TARGET="${PRODUCT_NAME}-userdebug"
+              echo "Testing: TARGET_RELEASE=$RELEASE lunch $TARGET"
+              if lunch "$TARGET" 2>&1; then
+                LUNCH_TARGET="$TARGET"
+                echo "=== SUCCESS with TARGET_RELEASE=$RELEASE ==="
+                break
+              fi
+            done
+          fi
+
+          # Last resort: try without release
+          if [ -z "$LUNCH_TARGET" ]; then
+            echo "=== Trying direct lunch ==="
+            lunch "${PRODUCT_NAME}-userdebug" 2>&1 || true
+            lunch "${PRODUCT_NAME}-eng" 2>&1 || true
+          fi
+
+          # Save result for next step
+          echo "lunch_target=$LUNCH_TARGET" >> $GITHUB_OUTPUT
+          echo "product_name=$PRODUCT_NAME" >> $GITHUB_OUTPUT
+
+          if [ -z "$LUNCH_TARGET" ]; then
+            echo "WARNING: Could not find valid lunch target, build may fail"
           fi
 
       - name: Build TWRP
@@ -185,27 +232,29 @@ jobs:
           # Source build environment
           source build/envsetup.sh 2>/dev/null
 
-          # Try different lunch formats for Android 14+/16
-          echo "=== Trying lunch formats ==="
+          # Get product name
+          PRODUCT_NAME=$(grep -r "PRODUCT_NAME\s*:=\s*" device/xiaomi/$DEVICE/*.mk 2>/dev/null | head -1 | sed 's/.*PRODUCT_NAME\s*:=\s*//' | tr -d ' ')
+          echo "Product: $PRODUCT_NAME"
+
+          # Try lunch with detected or fallback release configs
+          LUNCH_SUCCESS=false
 
           # Method 1: Try three-part format with common release names
-          LUNCH_SUCCESS=false
-          for RELEASE in ap3a ap4a ap5a aosp ap2a trunk_staging; do
-            echo "Trying: lunch twrp_rothko-${RELEASE}-userdebug"
-            if lunch twrp_rothko-${RELEASE}-userdebug 2>&1; then
+          for RELEASE in ap3a ap2a ap1a ap4a ap5a; do
+            echo "Trying: lunch ${PRODUCT_NAME}-${RELEASE}-userdebug"
+            if lunch "${PRODUCT_NAME}-${RELEASE}-userdebug" 2>&1; then
               echo "=== SUCCESS with release: $RELEASE ==="
               LUNCH_SUCCESS=true
               break
             fi
           done
 
-          # Method 2: If three-part failed, try with TARGET_RELEASE
+          # Method 2: Try with TARGET_RELEASE
           if [ "$LUNCH_SUCCESS" = false ]; then
-            echo "=== Trying TARGET_RELEASE method ==="
-            for RELEASE in ap3a ap4a ap5a aosp; do
-              echo "Trying: TARGET_RELEASE=$RELEASE lunch twrp_rothko-userdebug"
+            for RELEASE in ap3a ap2a ap1a; do
               export TARGET_RELEASE=$RELEASE
-              if lunch twrp_rothko-userdebug 2>&1; then
+              echo "Trying: TARGET_RELEASE=$RELEASE lunch ${PRODUCT_NAME}-userdebug"
+              if lunch "${PRODUCT_NAME}-userdebug" 2>&1; then
                 echo "=== SUCCESS with TARGET_RELEASE=$RELEASE ==="
                 LUNCH_SUCCESS=true
                 break
@@ -213,29 +262,23 @@ jobs:
             done
           fi
 
-          # Method 3: Try to find available lunch targets
+          # Method 3: List available configs and try them
           if [ "$LUNCH_SUCCESS" = false ]; then
-            echo "=== Trying to find available targets ==="
-            # Check if there's a lunch combo list
-            cat vendor/twrp/config/common.mk 2>/dev/null | head -20
-            # Try common TWRP patterns
-            for TARGET in twrp_rothko omni_rothko; do
-              for RELEASE in ap3a ap4a ap5a; do
-                echo "Trying: lunch ${TARGET}-${RELEASE}-userdebug"
-                if lunch ${TARGET}-${RELEASE}-userdebug 2>&1; then
-                  echo "=== SUCCESS ==="
-                  LUNCH_SUCCESS=true
-                  break 2
-                fi
+            echo "=== Listing available release configs ==="
+            if [ -d "build/release/flag_values" ]; then
+              ls build/release/flag_values/*.textproto 2>/dev/null | while read f; do
+                name=$(basename "$f" .textproto)
+                echo "  Config: $name"
+                lunch "${PRODUCT_NAME}-${name}-userdebug" 2>&1 && break
               done
-            done
+            fi
           fi
 
           if [ "$LUNCH_SUCCESS" = false ]; then
-            echo "=== ERROR: Could not find valid lunch target ==="
-            echo "Dumping available info:"
-            env | grep -i lunch
-            env | grep -i target
+            echo "ERROR: Could not configure lunch target"
+            echo "Dumping build environment:"
+            ls build/release/flag_values/ 2>/dev/null
+            ls build/release_config/ 2>/dev/null
             exit 1
           fi
 
@@ -247,14 +290,9 @@ jobs:
           echo "Available disk: $(df -h / | tail -1)"
           echo "============================================"
 
-          # Build - try recoveryimage first, fallback to adbd
+          # Build recoveryimage
           echo "=== Building recoveryimage ==="
-          if make recoveryimage -j$(nproc --all) 2>&1 | tail -100; then
-            echo "=== recoveryimage build complete ==="
-          else
-            echo "=== recoveryimage failed, trying adbd ==="
-            make adbd -j$(nproc --all) 2>&1 | tail -100
-          fi
+          make recoveryimage -j$(nproc --all) 2>&1 | tail -150
 
           echo "============================================"
           echo "=== Build complete ==="
