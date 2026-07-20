@@ -12,13 +12,14 @@ on:
         required: false
         default: '1'
       build_target:
-        description: 'Build target (adbd=fast, recoveryimage=full)'
+        description: 'Build target'
         required: false
-        default: 'adbd'
+        default: 'recoveryimage'
         type: choice
         options:
-          - adbd
           - recoveryimage
+          - adbd
+          - vendorbootimage
 
 env:
   MANIFEST_URL: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git
@@ -27,7 +28,7 @@ env:
   DEVICE_TREE_BRANCH: twrp-14.1_a16
   DEVICE: rothko
   SYNC_DEPTH: ${{ github.event.inputs.sync_depth || '1' }}
-  BUILD_TARGET: ${{ github.event.inputs.build_target || 'adbd' }}
+  BUILD_TARGET: ${{ github.event.inputs.build_target || 'recoveryimage' }}
 
 jobs:
   build:
