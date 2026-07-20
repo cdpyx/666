@@ -205,7 +205,7 @@ jobs:
       - name: Check build output
         if: always()
         run: |
-          cd ~/twrp
+          cd /home/runner/twrp
           echo "=== Looking for build artifacts ==="
 
           OUT_DIR="out/target/product/$DEVICE"
@@ -215,21 +215,29 @@ jobs:
             ls -la $OUT_DIR/
 
             echo ""
-            echo "=== Recovery images ==="
-            find $OUT_DIR -name "recovery.*" -o -name "boot.*" -o -name "vendor_boot.*" 2>/dev/null | head -20
+            echo "=== Recovery/vendor_boot images ==="
+            find $OUT_DIR -maxdepth 2 \( -name "recovery.*" -o -name "vendor_boot.*" -o -name "boot.*" \) 2>/dev/null
 
             echo ""
             echo "=== TWRP images ==="
-            find $OUT_DIR -name "twrp*" 2>/dev/null | head -20
+            find $OUT_DIR -maxdepth 2 -name "twrp*" 2>/dev/null
 
             echo ""
             echo "=== All IMG files ==="
-            find $OUT_DIR -name "*.img" 2>/dev/null | head -20
+            find $OUT_DIR -maxdepth 2 -name "*.img" 2>/dev/null
+
+            echo ""
+            echo "=== INSTALLED files ==="
+            find $OUT_DIR -name "installed-files*" 2>/dev/null | head -5
           else
             echo "Product directory not found at $OUT_DIR"
             echo "Checking out/ directory structure:"
-            find out/ -maxdepth 3 -type d 2>/dev/null | head -30
+            find out/ -maxdepth 4 -type d 2>/dev/null | head -50
           fi
+
+          echo ""
+          echo "=== Disk usage ==="
+          df -h /
 
       - name: Upload build artifacts
         if: always()
@@ -237,8 +245,9 @@ jobs:
         with:
           name: twrp-rothko-${{ github.run_number }}
           path: |
-            ~/twrp/out/target/product/${{ env.DEVICE }}/*.img
-            ~/twrp/out/target/product/${{ env.DEVICE }}/recovery.*
+            /home/runner/twrp/out/target/product/${{ env.DEVICE }}/*.img
+            /home/runner/twrp/out/target/product/${{ env.DEVICE }}/recovery.*
+            /home/runner/twrp/out/target/product/${{ env.DEVICE }}/vendor_boot.*
           retention-days: 30
           if-no-files-found: warn
 
@@ -246,7 +255,7 @@ jobs:
         if: failure()
         run: |
           echo "=== Build failed, checking logs ==="
-          cd ~/twrp
+          cd /home/runner/twrp
           if [ -f out/error.log ]; then
             echo "=== Error log ==="
             tail -200 out/error.log
