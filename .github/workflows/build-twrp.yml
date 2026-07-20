@@ -18,8 +18,8 @@ on:
         type: choice
         options:
           - recoveryimage
-          - adbd
           - vendorbootimage
+          - adbd
 
 env:
   MANIFEST_URL: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git
@@ -191,8 +191,7 @@ jobs:
           echo "=== Building $BUILD_TARGET ==="
           make $BUILD_TARGET \
             -j$(nproc --all) \
-            showcommands \
-            2>&1 | tail -200
+            2>&1 | tail -300
 
           BUILD_EXIT=$?
           echo "============================================"
