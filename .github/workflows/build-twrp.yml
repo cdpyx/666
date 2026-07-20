@@ -1,0 +1,244 @@
+name: Build TWRP for Xiaomi 14T Pro (rothko)
+
+on:
+  workflow_dispatch:
+    inputs:
+      twrp_branch:
+        description: 'TWRP manifest branch'
+        required: false
+        default: 'twrp-14.1'
+      sync_depth:
+        description: 'Shallow clone depth (0 for full)'
+        required: false
+        default: '1'
+
+env:
+  MANIFEST_URL: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git
+  MANIFEST_BRANCH: ${{ github.event.inputs.twrp_branch || 'twrp-14.1' }}
+  DEVICE_TREE_URL: https://github.com/JonesqPacMan/android_device_xiaomi_rothko_twrp.git
+  DEVICE_TREE_BRANCH: twrp-14.1_a16
+  DEVICE: rothko
+  BUILD_TARGET: adbd
+  SYNC_DEPTH: ${{ github.event.inputs.sync_depth || '1' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Free up disk space
+        run: |
+          echo "=== Before cleanup ==="
+          df -h /
+          sudo swapoff -a
+          sudo rm -f /swapfile
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/local/graalvm
+          sudo rm -rf /usr/local/share/powershell
+          sudo rm -rf /usr/local/share/chromium
+          sudo rm -rf /usr/local/lib/node_modules
+          sudo apt-get clean
+          echo "=== After cleanup ==="
+          df -h /
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential ccache curl flex \
+            g++-multilib gcc-multilib git git-lfs gnupg \
+            gperf imagemagick lib32readline-dev lib32z1-dev \
+            libelf-dev liblz4-tool libncurses5 libncurses5-dev \
+            libsdl1.2-dev libssl-dev libxml2 libxml2-utils \
+            lz4 pngcrush rsync schedtool squashfs-tools \
+            xsltproc zip zlib1g-dev libwxgtk3.0-gtk3-dev \
+            repo python3 python-is-python3 wget \
+            openjdk-17-jdk unzip
+          sudo apt-get clean
+          echo "=== Disk space after deps ==="
+          df -h /
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-twrp-rothko-${{ github.run_number }}
+          restore-keys: |
+            ccache-twrp-rothko-
+
+      - name: Configure ccache
+        run: |
+          ccache -M 10G
+          ccache -o compression=true
+          ccache -o compression_level=6
+          ccache -z
+
+      - name: Set up repo tool
+        run: |
+          mkdir -p ~/bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Sync TWRP source
+        run: |
+          mkdir -p ~/twrp
+          cd ~/twrp
+
+          echo "=== Initializing repo ==="
+          repo init -u $MANIFEST_URL \
+            -b $MANIFEST_BRANCH \
+            --depth=$SYNC_DEPTH \
+            --partial-clone \
+            --no-tags \
+            --no-clone-bundle \
+            2>&1 | tail -5
+
+          echo "=== Syncing source (this may take a while) ==="
+          repo sync -c -j$(nproc --all) \
+            --force-sync \
+            --no-tags \
+            --no-clone-bundle \
+            --optimized-fetch \
+            --prune \
+            2>&1 | tail -20
+
+          echo "=== Sync complete ==="
+          du -sh ~/twrp
+          df -h /
+
+      - name: Clone device tree
+        run: |
+          cd ~/twrp
+          mkdir -p device/xiaomi
+          git clone -b $DEVICE_TREE_BRANCH \
+            --depth=1 \
+            --single-branch \
+            $DEVICE_TREE_URL \
+            device/xiaomi/$DEVICE
+
+          echo "=== Device tree contents ==="
+          ls -la device/xiaomi/$DEVICE/
+
+      - name: Set up build environment
+        run: |
+          cd ~/twrp
+          echo "=== Build environment setup ==="
+          export BUILD_USERNAME=$(whoami)
+          export BUILD_HOSTNAME=$(hostname)
+
+          # Source build environment
+          source build/envsetup.sh
+
+          echo "=== Available lunch targets ==="
+          lunch twrp_rothko-userdebug 2>&1 || echo "Lunch failed, trying alternative..."
+
+          echo "=== Environment ready ==="
+
+      - name: Build TWRP
+        run: |
+          cd ~/twrp
+
+          # Set up environment variables
+          export USE_CCACHE=1
+          export CCACHE_DIR=~/.ccache
+          export CCACHE_EXEC=$(which ccache)
+          export BUILD_USERNAME=runner
+          export BUILD_HOSTNAME=github-actions
+
+          # Source and configure
+          source build/envsetup.sh
+          lunch twrp_rothko-userdebug
+
+          echo "============================================"
+          echo "=== Starting TWRP build for $DEVICE ==="
+          echo "============================================"
+          echo "Time: $(date)"
+          echo "Available RAM: $(free -h | head -2)"
+          echo "Available disk: $(df -h / | tail -1)"
+          echo "============================================"
+
+          # Build - use adbd for minimal build, recoveryimage for full
+          make adbd -j$(nproc --all) 2>&1 | tail -100
+
+          echo "============================================"
+          echo "=== Build complete ==="
+          echo "Time: $(date)"
+          echo "============================================"
+
+      - name: Check build output
+        run: |
+          cd ~/twrp
+          echo "=== Looking for build artifacts ==="
+
+          # Check for various output locations
+          OUT_DIR="out/target/product/$DEVICE"
+
+          if [ -d "$OUT_DIR" ]; then
+            echo "Found product directory:"
+            ls -la $OUT_DIR/
+
+            echo ""
+            echo "=== Recovery images ==="
+            find $OUT_DIR -name "recovery.*" -o -name "boot.*" -o -name "vendor_boot.*" 2>/dev/null | head -20
+
+            echo ""
+            echo "=== TWRP images ==="
+            find $OUT_DIR -name "twrp*" 2>/dev/null | head -20
+
+            echo ""
+            echo "=== All IMG files ==="
+            find $OUT_DIR -name "*.img" 2>/dev/null | head -20
+          else
+            echo "Product directory not found at $OUT_DIR"
+            echo "Checking out/ directory structure:"
+            find out/ -maxdepth 3 -type d 2>/dev/null | head -30
+          fi
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-rothko-${{ github.run_number }}
+          path: |
+            ~/twrp/out/target/product/${{ env.DEVICE }}/*.img
+            ~/twrp/out/target/product/${{ env.DEVICE }}/recovery.*
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Build log (on failure)
+        if: failure()
+        run: |
+          echo "=== Build failed, checking logs ==="
+          cd ~/twrp
+          if [ -f out/error.log ]; then
+            echo "=== Error log ==="
+            tail -200 out/error.log
+          fi
+          if [ -f out/verbose.log.gz ]; then
+            echo "=== Decompressing verbose log ==="
+            zcat out/verbose.log.gz | tail -500
+          fi
+          echo "=== Last modified files ==="
+          find out/ -name "*.log" -mmin -10 2>/dev/null | head -20
+          echo "=== Disk usage ==="
+          df -h /
+          echo "=== Ccache stats ==="
+          ccache -s
+
+      - name: Ccache stats
+        if: always()
+        run: |
+          echo "=== Ccache statistics ==="
+          ccache -s

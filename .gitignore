@@ -1,0 +1,15 @@
+# Build artifacts
+*.img
+*.zip
+*.bin
+out/
+
+# Ccache
+.ccache/
+
+# Repo
+.repo/
+
+# OS
+.DS_Store
+Thumbs.db
