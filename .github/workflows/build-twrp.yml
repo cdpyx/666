@@ -18,7 +18,6 @@ env:
   DEVICE_TREE_URL: https://github.com/JonesqPacMan/android_device_xiaomi_rothko_twrp.git
   DEVICE_TREE_BRANCH: twrp-14.1_a16
   DEVICE: rothko
-  BUILD_TARGET: adbd
   SYNC_DEPTH: ${{ github.event.inputs.sync_depth || '1' }}
 
 jobs:
@@ -131,20 +130,46 @@ jobs:
           echo "=== Device tree contents ==="
           ls -la device/xiaomi/$DEVICE/
 
-      - name: Set up build environment
+      - name: Detect release configuration
         run: |
           cd ~/twrp
-          echo "=== Build environment setup ==="
-          export BUILD_USERNAME=$(whoami)
-          export BUILD_HOSTNAME=$(hostname)
+          echo "=== Detecting available release configurations ==="
 
-          # Source build environment
-          source build/envsetup.sh
+          # Check for release configs in build/release_config
+          echo "--- build/release_config contents ---"
+          ls -la build/release_config/ 2>/dev/null || echo "No build/release_config dir"
 
-          echo "=== Available lunch targets ==="
-          lunch twrp_rothko-userdebug 2>&1 || echo "Lunch failed, trying alternative..."
+          # Check for release configs in vendor
+          echo "--- Looking for release configs ---"
+          find . -path "*/release_config*" -name "*.textproto" 2>/dev/null | head -20
 
-          echo "=== Environment ready ==="
+          # Check available products
+          echo "--- Checking envsetup.sh lunch function ---"
+          source build/envsetup.sh 2>/dev/null
+
+          # Try to find valid release names
+          echo "--- Checking build/make/core/release_config.mk ---"
+          cat build/make/core/release_config.mk 2>/dev/null | head -30 || echo "File not found"
+
+          # Check for AP release configs
+          echo "--- Looking for AP release configs ---"
+          find build/release_config -name "*.textproto" 2>/dev/null | head -20
+
+          # Check vendor/xiaomi for release configs
+          echo "--- Checking vendor/xiaomi ---"
+          find vendor/xiaomi -name "*release*" -o -name "*config*" 2>/dev/null | head -20
+
+          # Try to list all lunch combos
+          echo "--- Attempting to list products ---"
+          TWRP_PRODUCT=$(grep -r "PRODUCT_DEVICE\s*:=\s*$DEVICE" device/ 2>/dev/null | head -1 | cut -d: -f1)
+          echo "Device tree for $DEVICE: $TWRP_PRODUCT"
+
+          # Find the product name
+          if [ -n "$TWRP_PRODUCT" ]; then
+            TWRP_DIR=$(dirname "$TWRP_PRODUCT")
+            echo "TWRP device dir: $TWRP_DIR"
+            cat "$TWRP_DIR/AndroidProducts.mk" 2>/dev/null
+          fi
 
       - name: Build TWRP
         run: |
@@ -157,9 +182,62 @@ jobs:
           export BUILD_USERNAME=runner
           export BUILD_HOSTNAME=github-actions
 
-          # Source and configure
-          source build/envsetup.sh
-          lunch twrp_rothko-userdebug
+          # Source build environment
+          source build/envsetup.sh 2>/dev/null
+
+          # Try different lunch formats for Android 14+/16
+          echo "=== Trying lunch formats ==="
+
+          # Method 1: Try three-part format with common release names
+          LUNCH_SUCCESS=false
+          for RELEASE in ap3a ap4a ap5a aosp ap2a trunk_staging; do
+            echo "Trying: lunch twrp_rothko-${RELEASE}-userdebug"
+            if lunch twrp_rothko-${RELEASE}-userdebug 2>&1; then
+              echo "=== SUCCESS with release: $RELEASE ==="
+              LUNCH_SUCCESS=true
+              break
+            fi
+          done
+
+          # Method 2: If three-part failed, try with TARGET_RELEASE
+          if [ "$LUNCH_SUCCESS" = false ]; then
+            echo "=== Trying TARGET_RELEASE method ==="
+            for RELEASE in ap3a ap4a ap5a aosp; do
+              echo "Trying: TARGET_RELEASE=$RELEASE lunch twrp_rothko-userdebug"
+              export TARGET_RELEASE=$RELEASE
+              if lunch twrp_rothko-userdebug 2>&1; then
+                echo "=== SUCCESS with TARGET_RELEASE=$RELEASE ==="
+                LUNCH_SUCCESS=true
+                break
+              fi
+            done
+          fi
+
+          # Method 3: Try to find available lunch targets
+          if [ "$LUNCH_SUCCESS" = false ]; then
+            echo "=== Trying to find available targets ==="
+            # Check if there's a lunch combo list
+            cat vendor/twrp/config/common.mk 2>/dev/null | head -20
+            # Try common TWRP patterns
+            for TARGET in twrp_rothko omni_rothko; do
+              for RELEASE in ap3a ap4a ap5a; do
+                echo "Trying: lunch ${TARGET}-${RELEASE}-userdebug"
+                if lunch ${TARGET}-${RELEASE}-userdebug 2>&1; then
+                  echo "=== SUCCESS ==="
+                  LUNCH_SUCCESS=true
+                  break 2
+                fi
+              done
+            done
+          fi
+
+          if [ "$LUNCH_SUCCESS" = false ]; then
+            echo "=== ERROR: Could not find valid lunch target ==="
+            echo "Dumping available info:"
+            env | grep -i lunch
+            env | grep -i target
+            exit 1
+          fi
 
           echo "============================================"
           echo "=== Starting TWRP build for $DEVICE ==="
@@ -169,8 +247,14 @@ jobs:
           echo "Available disk: $(df -h / | tail -1)"
           echo "============================================"
 
-          # Build - use adbd for minimal build, recoveryimage for full
-          make adbd -j$(nproc --all) 2>&1 | tail -100
+          # Build - try recoveryimage first, fallback to adbd
+          echo "=== Building recoveryimage ==="
+          if make recoveryimage -j$(nproc --all) 2>&1 | tail -100; then
+            echo "=== recoveryimage build complete ==="
+          else
+            echo "=== recoveryimage failed, trying adbd ==="
+            make adbd -j$(nproc --all) 2>&1 | tail -100
+          fi
 
           echo "============================================"
           echo "=== Build complete ==="
@@ -178,11 +262,11 @@ jobs:
           echo "============================================"
 
       - name: Check build output
+        if: always()
         run: |
           cd ~/twrp
           echo "=== Looking for build artifacts ==="
 
-          # Check for various output locations
           OUT_DIR="out/target/product/$DEVICE"
 
           if [ -d "$OUT_DIR" ]; then
