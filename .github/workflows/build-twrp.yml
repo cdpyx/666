@@ -11,6 +11,14 @@ on:
         description: 'Shallow clone depth (0 for full)'
         required: false
         default: '1'
+      build_target:
+        description: 'Build target (adbd=fast, recoveryimage=full)'
+        required: false
+        default: 'adbd'
+        type: choice
+        options:
+          - adbd
+          - recoveryimage
 
 env:
   MANIFEST_URL: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git
@@ -19,6 +27,7 @@ env:
   DEVICE_TREE_BRANCH: twrp-14.1_a16
   DEVICE: rothko
   SYNC_DEPTH: ${{ github.event.inputs.sync_depth || '1' }}
+  BUILD_TARGET: ${{ github.event.inputs.build_target || 'adbd' }}
 
 jobs:
   build:
@@ -72,9 +81,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: ccache-twrp-rothko-${{ github.run_number }}
+          key: ccache-twrp-rothko-v2-${{ github.run_number }}
           restore-keys: |
-            ccache-twrp-rothko-
+            ccache-twrp-rothko-v2-
 
       - name: Configure ccache
         run: |
@@ -130,117 +139,30 @@ jobs:
           echo "=== Device tree contents ==="
           ls -la device/xiaomi/$DEVICE/
 
-      - name: Detect release config & lunch target
-        id: detect
-        run: |
-          cd ~/twrp
-          echo "=== Detecting release configuration ==="
-
-          # Source build env to make functions available
-          source build/envsetup.sh 2>/dev/null
-
-          # Find available release configs from build/release/flag_values/
-          RELEASE_CONFIGS=()
-          if [ -d "build/release/flag_values" ]; then
-            echo "Found build/release/flag_values/"
-            for f in build/release/flag_values/*.textproto; do
-              if [ -f "$f" ]; then
-                name=$(basename "$f" .textproto)
-                RELEASE_CONFIGS+=("$name")
-                echo "  Found release config: $name"
-              fi
-            done
-          fi
-
-          # Also check build/release_config/
-          if [ -d "build/release_config" ]; then
-            echo "Found build/release_config/"
-            for f in build/release_config/*.textproto; do
-              if [ -f "$f" ]; then
-                name=$(basename "$f" .textproto)
-                RELEASE_CONFIGS+=("$name")
-                echo "  Found release config: $name"
-              fi
-            done
-          fi
-
-          # If no configs found, try common Android 14 names
-          if [ ${#RELEASE_CONFIGS[@]} -eq 0 ]; then
-            echo "No release configs found in expected dirs, trying defaults..."
-            RELEASE_CONFIGS=("ap3a" "ap2a" "ap1a")
-          fi
-
-          echo "Available release configs: ${RELEASE_CONFIGS[*]}"
-
-          # Find the product name from device tree
-          PRODUCT_NAME=$(grep -r "PRODUCT_NAME\s*:=\s*" device/xiaomi/$DEVICE/*.mk 2>/dev/null | head -1 | sed 's/.*PRODUCT_NAME\s*:=\s*//' | tr -d ' ')
-          echo "Product name: $PRODUCT_NAME"
-
-          # Try each release config with lunch
-          LUNCH_TARGET=""
-          for RELEASE in "${RELEASE_CONFIGS[@]}"; do
-            TARGET="${PRODUCT_NAME}-${RELEASE}-userdebug"
-            echo "Testing: lunch $TARGET"
-            if lunch "$TARGET" 2>&1; then
-              LUNCH_TARGET="$TARGET"
-              echo "=== SUCCESS: $TARGET ==="
-              break
-            fi
-          done
-
-          # If three-part format failed, try setting TARGET_RELEASE
-          if [ -z "$LUNCH_TARGET" ]; then
-            echo "=== Three-part format failed, trying TARGET_RELEASE ==="
-            for RELEASE in "${RELEASE_CONFIGS[@]}"; do
-              export TARGET_RELEASE="$RELEASE"
-              TARGET="${PRODUCT_NAME}-userdebug"
-              echo "Testing: TARGET_RELEASE=$RELEASE lunch $TARGET"
-              if lunch "$TARGET" 2>&1; then
-                LUNCH_TARGET="$TARGET"
-                echo "=== SUCCESS with TARGET_RELEASE=$RELEASE ==="
-                break
-              fi
-            done
-          fi
-
-          # Last resort: try without release
-          if [ -z "$LUNCH_TARGET" ]; then
-            echo "=== Trying direct lunch ==="
-            lunch "${PRODUCT_NAME}-userdebug" 2>&1 || true
-            lunch "${PRODUCT_NAME}-eng" 2>&1 || true
-          fi
-
-          # Save result for next step
-          echo "lunch_target=$LUNCH_TARGET" >> $GITHUB_OUTPUT
-          echo "product_name=$PRODUCT_NAME" >> $GITHUB_OUTPUT
-
-          if [ -z "$LUNCH_TARGET" ]; then
-            echo "WARNING: Could not find valid lunch target, build may fail"
-          fi
-
       - name: Build TWRP
         run: |
           cd ~/twrp
 
-          # Set up environment variables
+          # Set up environment
           export USE_CCACHE=1
           export CCACHE_DIR=~/.ccache
           export CCACHE_EXEC=$(which ccache)
           export BUILD_USERNAME=runner
           export BUILD_HOSTNAME=github-actions
+          # Reduce memory usage
+          export NINJA_ARGS="-j$(nproc --all)"
+          export OUT_DIR=out
 
           # Source build environment
           source build/envsetup.sh 2>/dev/null
 
-          # Get product name
+          # Find product name from device tree
           PRODUCT_NAME=$(grep -r "PRODUCT_NAME\s*:=\s*" device/xiaomi/$DEVICE/*.mk 2>/dev/null | head -1 | sed 's/.*PRODUCT_NAME\s*:=\s*//' | tr -d ' ')
           echo "Product: $PRODUCT_NAME"
 
-          # Try lunch with detected or fallback release configs
+          # Try lunch with correct release name (ap2a confirmed working)
           LUNCH_SUCCESS=false
-
-          # Method 1: Try three-part format with common release names
-          for RELEASE in ap3a ap2a ap1a ap4a ap5a; do
+          for RELEASE in ap2a ap3a ap1a ap4a; do
             echo "Trying: lunch ${PRODUCT_NAME}-${RELEASE}-userdebug"
             if lunch "${PRODUCT_NAME}-${RELEASE}-userdebug" 2>&1; then
               echo "=== SUCCESS with release: $RELEASE ==="
@@ -249,55 +171,35 @@ jobs:
             fi
           done
 
-          # Method 2: Try with TARGET_RELEASE
-          if [ "$LUNCH_SUCCESS" = false ]; then
-            for RELEASE in ap3a ap2a ap1a; do
-              export TARGET_RELEASE=$RELEASE
-              echo "Trying: TARGET_RELEASE=$RELEASE lunch ${PRODUCT_NAME}-userdebug"
-              if lunch "${PRODUCT_NAME}-userdebug" 2>&1; then
-                echo "=== SUCCESS with TARGET_RELEASE=$RELEASE ==="
-                LUNCH_SUCCESS=true
-                break
-              fi
-            done
-          fi
-
-          # Method 3: List available configs and try them
-          if [ "$LUNCH_SUCCESS" = false ]; then
-            echo "=== Listing available release configs ==="
-            if [ -d "build/release/flag_values" ]; then
-              ls build/release/flag_values/*.textproto 2>/dev/null | while read f; do
-                name=$(basename "$f" .textproto)
-                echo "  Config: $name"
-                lunch "${PRODUCT_NAME}-${name}-userdebug" 2>&1 && break
-              done
-            fi
-          fi
-
           if [ "$LUNCH_SUCCESS" = false ]; then
             echo "ERROR: Could not configure lunch target"
-            echo "Dumping build environment:"
-            ls build/release/flag_values/ 2>/dev/null
-            ls build/release_config/ 2>/dev/null
             exit 1
           fi
 
           echo "============================================"
           echo "=== Starting TWRP build for $DEVICE ==="
+          echo "=== Target: $BUILD_TARGET ==="
           echo "============================================"
           echo "Time: $(date)"
           echo "Available RAM: $(free -h | head -2)"
           echo "Available disk: $(df -h / | tail -1)"
+          echo "CPU cores: $(nproc --all)"
           echo "============================================"
 
-          # Build recoveryimage
-          echo "=== Building recoveryimage ==="
-          make recoveryimage -j$(nproc --all) 2>&1 | tail -150
+          # Build with specified target
+          echo "=== Building $BUILD_TARGET ==="
+          make $BUILD_TARGET \
+            -j$(nproc --all) \
+            showcommands \
+            2>&1 | tail -200
 
+          BUILD_EXIT=$?
           echo "============================================"
-          echo "=== Build complete ==="
+          echo "=== Build finished with exit code: $BUILD_EXIT ==="
           echo "Time: $(date)"
           echo "============================================"
+
+          exit $BUILD_EXIT
 
       - name: Check build output
         if: always()
