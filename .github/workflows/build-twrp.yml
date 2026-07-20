@@ -195,11 +195,26 @@ jobs:
           echo "=== Building $BUILD_TARGET (log: $BUILD_LOG) ==="
           echo "Start time: $(date)"
 
+          # Trap SIGTERM to see what's killing us
+          trap 'echo "[$(date)] SIGTERM received! Process tree:"; ps auxf; echo "=== dmesg last 20 lines ==="; dmesg 2>/dev/null | tail -20 || true' TERM
+
           # Run the build with output to file
           make $BUILD_TARGET \
             -j$BUILD_JOBS \
-            > $BUILD_LOG 2>&1
+            > $BUILD_LOG 2>&1 &
+          BUILD_PID=$!
+          echo "Build PID: $BUILD_PID"
 
+          # Wait for build with timeout monitoring
+          WAIT_COUNT=0
+          while kill -0 $BUILD_PID 2>/dev/null; do
+            sleep 30
+            WAIT_COUNT=$((WAIT_COUNT + 1))
+            if [ $((WAIT_COUNT % 2)) -eq 0 ]; then
+              echo "[$(date)] Build running... ($(du -h $BUILD_LOG 2>/dev/null | cut -f1) log, $(free -h | awk '/Mem:/{print $7}' ) RAM free)"
+            fi
+          done
+          wait $BUILD_PID
           BUILD_EXIT=$?
 
           echo "============================================"
