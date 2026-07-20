@@ -150,9 +150,12 @@ jobs:
           export CCACHE_EXEC=$(which ccache)
           export BUILD_USERNAME=runner
           export BUILD_HOSTNAME=github-actions
-          # Reduce memory usage
-          export NINJA_ARGS="-j$(nproc --all)"
           export OUT_DIR=out
+
+          # Reduce parallelism to avoid OOM killer on 15GB RAM runner
+          CORES=$(nproc --all)
+          BUILD_JOBS=$((CORES > 2 ? CORES - 1 : 1))
+          echo "Using $BUILD_JOBS parallel jobs (of $CORES cores)"
 
           # Source build environment
           source build/envsetup.sh 2>/dev/null
@@ -184,20 +187,42 @@ jobs:
           echo "Time: $(date)"
           echo "Available RAM: $(free -h | head -2)"
           echo "Available disk: $(df -h / | tail -1)"
-          echo "CPU cores: $(nproc --all)"
+          echo "CPU cores: $CORES, using $BUILD_JOBS jobs"
           echo "============================================"
 
-          # Build with specified target
-          echo "=== Building $BUILD_TARGET ==="
-          make $BUILD_TARGET \
-            -j$(nproc --all) \
-            2>&1 | tail -300
+          # Build - log to file, monitor resources
+          BUILD_LOG="$HOME/build.log"
+          echo "=== Building $BUILD_TARGET (log: $BUILD_LOG) ==="
 
-          BUILD_EXIT=$?
+          # Start memory monitor in background
+          while true; do
+            echo "[$(date +%H:%M:%S)] RAM: $(free -h | awk '/Mem:/{print $3"/"$2, "("$7" avail)"}')" >> $HOME/mem_monitor.log
+            sleep 60
+          done &
+          MONITOR_PID=$!
+
+          # Run the build
+          make $BUILD_TARGET \
+            -j$BUILD_JOBS \
+            2>&1 | tee $BUILD_LOG | tail -500
+
+          BUILD_EXIT=${PIPESTATUS[0]}
+
+          # Stop memory monitor
+          kill $MONITOR_PID 2>/dev/null || true
+
           echo "============================================"
           echo "=== Build finished with exit code: $BUILD_EXIT ==="
           echo "Time: $(date)"
+          echo "=== Memory monitor log ==="
+          tail -20 $HOME/mem_monitor.log 2>/dev/null || echo "No memory log"
           echo "============================================"
+
+          # Show error details if build failed
+          if [ $BUILD_EXIT -ne 0 ]; then
+            echo "=== BUILD FAILED - Last 50 lines of build log ==="
+            tail -50 $BUILD_LOG 2>/dev/null
+          fi
 
           exit $BUILD_EXIT
 
