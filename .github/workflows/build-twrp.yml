@@ -169,7 +169,7 @@ jobs:
           sed -i '/android\.security\.authorization-ndk_platform/d' "$LIBTAR_MK"
           sed -i '/android\.security\.maintenance-ndk_platform/d' "$LIBTAR_MK"
           sed -i '/libgatekeeper_aidl/d' "$LIBTAR_MK"
-          echo "=== Patched ==="
+          echo "=== Done ==="
           grep -c "ndk_platform\|gatekeeper_aidl" "$LIBTAR_MK" && echo "WARNING: some refs remain" || echo "All AIDL refs removed"
 
       - name: Build TWRP
