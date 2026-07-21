@@ -87,10 +87,10 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Set up ccache
-        uses: actions/cache@v4
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
         with:
-          path: ~/twrp
+          path: ~/.ccache
           key: ccache-twrp-rothko-v2-${{ github.run_number }}
           restore-keys: |
             ccache-twrp-rothko-v2-
@@ -101,6 +101,13 @@ jobs:
           ccache -o compression=true
           ccache -o compression_level=6
           ccache -z
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.ccache
+          key: ccache-twrp-rothko-v2-${{ github.run_number }}
 
       - name: Set up repo tool
         run: |
