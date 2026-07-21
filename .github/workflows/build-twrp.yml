@@ -169,17 +169,20 @@ jobs:
           PREBUILT_DIR="device/xiaomi/$DEVICE/prebuilt_aidl"
           mkdir -p "$PREBUILT_DIR"
           cp -v "$PREBUILT_SRC"/*.so "$PREBUILT_DIR/"
-          python3 -c "
-libs = ['android.security.apc-ndk_platform', 'android.system.keystore2-V1-ndk_platform', 'android.security.authorization-ndk_platform', 'android.security.maintenance-ndk_platform', 'libgatekeeper_aidl']
-lines = ['LOCAL_PATH := \$(call my-dir)', '']
-for lib in libs:
-    lines += ['include \$(CLEAR_VARS)', 'LOCAL_MODULE := ' + lib, 'LOCAL_SRC_FILES := ' + lib + '.so', 'LOCAL_MODULE_CLASS := SHARED_LIBRARIES', 'LOCAL_MODULE_SUFFIX := .so', 'LOCAL_MODULE_TARGET_ARCH := arm64', 'LOCAL_MULTILIB := 64', 'include \$(BUILD_PREBUILT)', '']
-with open('$PREBUILT_DIR/Android.mk', 'w') as f:
-    f.write('\n'.join(lines))
-print('Created Android.mk')
-"
-          echo "=== Done ==="
-          ls -la "$PREBUILT_DIR/"
+          echo "LOCAL_PATH := \$(call my-dir)" > "$PREBUILT_DIR/Android.mk"
+          echo "" >> "$PREBUILT_DIR/Android.mk"
+          for MOD in android.security.apc-ndk_platform android.system.keystore2-V1-ndk_platform android.security.authorization-ndk_platform android.security.maintenance-ndk_platform libgatekeeper_aidl; do
+            echo "include \$(CLEAR_VARS)" >> "$PREBUILT_DIR/Android.mk"
+            echo "LOCAL_MODULE := $MOD" >> "$PREBUILT_DIR/Android.mk"
+            echo "LOCAL_SRC_FILES := $MOD.so" >> "$PREBUILT_DIR/Android.mk"
+            echo "LOCAL_MODULE_CLASS := SHARED_LIBRARIES" >> "$PREBUILT_DIR/Android.mk"
+            echo "LOCAL_MODULE_SUFFIX := .so" >> "$PREBUILT_DIR/Android.mk"
+            echo "LOCAL_MODULE_TARGET_ARCH := arm64" >> "$PREBUILT_DIR/Android.mk"
+            echo "LOCAL_MULTILIB := 64" >> "$PREBUILT_DIR/Android.mk"
+            echo "include \$(BUILD_PREBUILT)" >> "$PREBUILT_DIR/Android.mk"
+            echo "" >> "$PREBUILT_DIR/Android.mk"
+          done
+          echo "=== Created Android.mk ==="
           cat "$PREBUILT_DIR/Android.mk"
 
       - name: Build TWRP
