@@ -1,10 +1,8 @@
 #!/bin/bash
-# Fix libtar AIDL dependency for FBE crypto support
-# Falls back to sed delete if prebuilt libs not available
-# Usage: setup_prebuilt_aidl.sh <device> <prebuilt_src>
+# Fix libtar AIDL dependency - remove entire FBE crypto section
+# Usage: setup_prebuilt_aidl.sh <device>
 
 DEVICE="$1"
-PREBUILT_SRC="$2"
 LIBTAR_MK="bootable/recovery/libtar/Android.mk"
 
 if [ ! -f "$LIBTAR_MK" ]; then
@@ -12,45 +10,66 @@ if [ ! -f "$LIBTAR_MK" ]; then
   exit 1
 fi
 
-# Check if prebuilt libs exist
-if [ -d "$PREBUILT_SRC" ] && ls "$PREBUILT_SRC"/*.so 1>/dev/null 2>&1; then
-  echo "=== Found prebuilt AIDL libs at $PREBUILT_SRC ==="
-  PREBUILT_DIR="device/xiaomi/$DEVICE/prebuilt_aidl"
-  mkdir -p "$PREBUILT_DIR"
-  cp -v "$PREBUILT_SRC"/*.so "$PREBUILT_DIR/"
+echo "=== Original libtar/Android.mk ==="
+cat "$LIBTAR_MK"
+echo ""
 
-  # Create Android.mk for prebuilt modules
-  MK="$PREBUILT_DIR/Android.mk"
-  printf 'LOCAL_PATH := $(call my-dir)\n\n' > "$MK"
-  for MOD in android.security.apc-ndk_platform android.system.keystore2-V1-ndk_platform android.security.authorization-ndk_platform android.security.maintenance-ndk_platform libgatekeeper_aidl; do
-    printf 'include $(CLEAR_VARS)\n' >> "$MK"
-    printf "LOCAL_MODULE := $MOD\n" >> "$MK"
-    printf "LOCAL_SRC_FILES := $MOD.so\n" >> "$MK"
-    printf 'LOCAL_MODULE_CLASS := SHARED_LIBRARIES\n' >> "$MK"
-    printf 'LOCAL_MODULE_SUFFIX := .so\n' >> "$MK"
-    printf 'LOCAL_MODULE_TARGET_ARCH := arm64\n' >> "$MK"
-    printf 'LOCAL_MULTILIB := 64\n' >> "$MK"
-    printf 'include $(BUILD_PREBUILT)\n\n' >> "$MK"
-  done
+# Strategy: Replace the entire ifeq TW_INCLUDE_CRYPTO_FBE block with just the USE_FSCRYPT flags
+# This removes all problematic AIDL dependencies while keeping basic FSCRYPT support
 
-  # Add to device.mk
-  printf '\n# Prebuilt AIDL libs for FBE crypto\n' >> "device/xiaomi/$DEVICE/device.mk"
-  printf 'PRODUCT_PACKAGES += \\\n' >> "device/xiaomi/$DEVICE/device.mk"
-  for lib in android.security.apc-ndk_platform android.system.keystore2-V1-ndk_platform android.security.authorization-ndk_platform android.security.maintenance-ndk_platform libgatekeeper_aidl; do
-    printf "    $lib \\\\\n" >> "device/xiaomi/$DEVICE/device.mk"
-  done
+# Use Python for reliable multi-line block replacement
+python3 << 'PYEOF'
+import re
 
-  echo "=== FBE: prebuilt AIDL modules registered ==="
+with open("bootable/recovery/libtar/Android.mk", "r") as f:
+    content = f.read()
+
+# Remove the entire ifeq ($(TW_INCLUDE_CRYPTO_FBE), true) block
+# Pattern: from "ifeq ($(TW_INCLUDE_CRYPTO_FBE), true)" to the matching "endif"
+# We need to handle nested ifeq/endif properly
+
+lines = content.split('\n')
+result = []
+skip = False
+depth = 0
+
+for line in lines:
+    stripped = line.strip()
+
+    if not skip:
+        if 'ifeq ($(TW_INCLUDE_CRYPTO_FBE)' in stripped or 'ifeq ($(TW_INCLUDE_CRYPTO_FBE),' in stripped:
+            skip = True
+            depth = 1
+            result.append('# FBE crypto dependencies removed for minimal manifest compatibility')
+            result.append('# Re-enable when AIDL modules are available in the build tree')
+            continue
+        result.append(line)
+    else:
+        if stripped.startswith('ifeq') or stripped.startswith('ifdef') or stripped.startswith('ifneq'):
+            depth += 1
+        elif stripped == 'endif':
+            depth -= 1
+            if depth == 0:
+                skip = False
+        # Keep the USE_FSCRYPT and FSCRYPT_POLICY lines
+        if 'USE_FSCRYPT' in stripped or 'FSCRYPT_POLICY' in stripped:
+            result.append(line)
+
+with open("bootable/recovery/libtar/Android.mk", "w") as f:
+    f.write('\n'.join(result))
+
+print("=== Patched libtar/Android.mk ===")
+PYEOF
+
+echo ""
+echo "=== Result ==="
+cat "$LIBTAR_MK"
+
+echo ""
+echo "=== Verification ==="
+if grep -q "ndk_platform\|gatekeeper_aidl" "$LIBTAR_MK"; then
+  echo "WARNING: Some AIDL refs remain"
+  grep -n "ndk_platform\|gatekeeper_aidl" "$LIBTAR_MK"
 else
-  echo "=== Prebuilt libs not found at $PREBUILT_SRC ==="
-  echo "=== Falling back to sed delete ==="
-  sed -i '/android\.security\.apc-ndk_platform/d' "$LIBTAR_MK"
-  sed -i '/android\.system\.keystore2-V1-ndk_platform/d' "$LIBTAR_MK"
-  sed -i '/android\.security\.authorization-ndk_platform/d' "$LIBTAR_MK"
-  sed -i '/android\.security\.maintenance-ndk_platform/d' "$LIBTAR_MK"
-  sed -i '/libgatekeeper_aidl/d' "$LIBTAR_MK"
-  echo "=== FBE: AIDL deps removed from libtar ==="
+  echo "OK: All AIDL refs removed"
 fi
-
-echo "=== libtar/Android.mk status ==="
-grep -c "ndk_platform\|gatekeeper_aidl" "$LIBTAR_MK" && echo "WARNING: some AIDL refs remain" || echo "All AIDL refs handled"

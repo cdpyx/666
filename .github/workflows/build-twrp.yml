@@ -168,11 +168,11 @@ jobs:
             echo "Created: ${REL}.textproto"
           done
 
-      - name: Fix libtar AIDL dependency (FBE)
+      - name: Fix libtar AIDL dependency
         run: |
           cd ~/twrp
           chmod +x "$GITHUB_WORKSPACE/scripts/setup_prebuilt_aidl.sh"
-          "$GITHUB_WORKSPACE/scripts/setup_prebuilt_aidl.sh" "$DEVICE" "$GITHUB_WORKSPACE/prebuilt_libs/lib64"
+          "$GITHUB_WORKSPACE/scripts/setup_prebuilt_aidl.sh" "$DEVICE"
 
       - name: Build TWRP
         run: |
