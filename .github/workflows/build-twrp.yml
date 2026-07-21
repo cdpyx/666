@@ -14,12 +14,12 @@ on:
       build_target:
         description: 'Build target'
         required: false
-        default: 'vendorbootimage'
+        default: 'adbd'
         type: choice
         options:
+          - adbd
           - vendorbootimage
           - recoveryimage
-          - adbd
 
 env:
   MANIFEST_URL: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git
@@ -148,6 +148,24 @@ jobs:
 
           echo "=== Device tree contents ==="
           ls -la device/xiaomi/$DEVICE/
+
+      - name: Fix libtar AIDL dependency
+        run: |
+          cd ~/twrp
+          echo "=== Patching libtar/Android.mk to fix missing AIDL deps ==="
+
+          LIBTAR_MK="bootable/recovery/libtar/Android.mk"
+          if [ -f "$LIBTAR_MK" ]; then
+            # Remove problematic AIDL-generated shared libraries that may not exist in minimal manifest
+            sed -i '/android\.security\.apc-ndk_platform/d' "$LIBTAR_MK"
+            sed -i '/android\.system\.keystore2-V1-ndk_platform/d' "$LIBTAR_MK"
+            sed -i '/android\.security\.authorization-ndk_platform/d' "$LIBTAR_MK"
+            sed -i '/android\.security\.maintenance-ndk_platform/d' "$LIBTAR_MK"
+            sed -i '/libgatekeeper_aidl/d' "$LIBTAR_MK"
+            echo "Patched $LIBTAR_MK"
+          else
+            echo "WARNING: $LIBTAR_MK not found"
+          fi
 
       - name: Build TWRP
         run: |
