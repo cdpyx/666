@@ -14,11 +14,11 @@ on:
       build_target:
         description: 'Build target'
         required: false
-        default: 'recoveryimage'
+        default: 'vendorbootimage'
         type: choice
         options:
-          - recoveryimage
           - vendorbootimage
+          - recoveryimage
           - adbd
 
 env:
@@ -28,7 +28,7 @@ env:
   DEVICE_TREE_BRANCH: twrp-14.1_a16
   DEVICE: rothko
   SYNC_DEPTH: ${{ github.event.inputs.sync_depth || '1' }}
-  BUILD_TARGET: ${{ github.event.inputs.build_target || 'recoveryimage' }}
+  BUILD_TARGET: ${{ github.event.inputs.build_target || 'vendorbootimage' }}
 
 jobs:
   build:
