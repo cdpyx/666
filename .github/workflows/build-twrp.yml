@@ -149,10 +149,10 @@ jobs:
           echo "=== Device tree contents ==="
           ls -la device/xiaomi/$DEVICE/
 
-      - name: Fix libtar AIDL dependency (conditional FBE)
+      - name: Fix libtar AIDL dependency (FBE support)
         run: |
           cd ~/twrp
-          echo "=== Patching libtar/Android.mk for conditional AIDL deps ==="
+          echo "=== Setting up prebuilt AIDL libs for FBE ==="
 
           LIBTAR_MK="bootable/recovery/libtar/Android.mk"
           if [ ! -f "$LIBTAR_MK" ]; then
@@ -160,30 +160,72 @@ jobs:
             exit 1
           fi
 
-          # Check if AIDL modules exist in the build system
-          AIDL_MISSING=false
-          for MOD in android.security.apc-ndk_platform android.system.keystore2-V1-ndk_platform; do
-            if ! grep -rq "\"$MOD\"" build/make/core/ build/soong/ frameworks/ system/ 2>/dev/null; then
-              echo "AIDL module missing: $MOD"
-              AIDL_MISSING=true
-            fi
-          done
-
-          if [ "$AIDL_MISSING" = true ]; then
-            echo "=== AIDL modules not found, applying conditional patch ==="
-            # Comment out problematic AIDL deps instead of deleting them
-            sed -i 's/^\(.*android\.security\.apc-ndk_platform.*\)/# \1 # AUTO_DISABLED: AIDL missing/' "$LIBTAR_MK"
-            sed -i 's/^\(.*android\.system\.keystore2-V1-ndk_platform.*\)/# \1 # AUTO_DISABLED: AIDL missing/' "$LIBTAR_MK"
-            sed -i 's/^\(.*android\.security\.authorization-ndk_platform.*\)/# \1 # AUTO_DISABLED: AIDL missing/' "$LIBTAR_MK"
-            sed -i 's/^\(.*android\.security\.maintenance-ndk_platform.*\)/# \1 # AUTO_DISABLED: AIDL missing/' "$LIBTAR_MK"
-            sed -i 's/^\(.*libgatekeeper_aidl.*\)/# \1 # AUTO_DISABLED: AIDL missing/' "$LIBTAR_MK"
-            echo "Patched: AIDL deps commented out (FBE decrypt limited)"
-          else
-            echo "All AIDL modules found, no patching needed (FBE full support)"
+          PREBUILT_SRC="$GITHUB_WORKSPACE/prebuilt_libs/lib64"
+          if [ ! -d "$PREBUILT_SRC" ]; then
+            echo "WARNING: Prebuilt libs not found, skipping FBE fix"
+            exit 0
           fi
 
-          echo "=== Patched libtar/Android.mk ==="
-          grep -n "ndk_platform\|gatekeeper_aidl" "$LIBTAR_MK" || echo "(no remaining ndk_platform refs)"
+          # Create prebuilt module directory
+          PREBUILT_DIR="device/xiaomi/$DEVICE/prebuilt_aidl"
+          mkdir -p "$PREBUILT_DIR"
+          cp -v "$PREBUILT_SRC"/*.so "$PREBUILT_DIR/"
+
+          # Create Android.mk for prebuilt AIDL libs
+          cat > "$PREBUILT_DIR/Android.mk" << 'EOF'
+LOCAL_PATH := $(call my-dir)
+
+# Prebuilt AIDL libraries extracted from stock ROM for FBE support
+include $(CLEAR_VARS)
+LOCAL_MODULE := android.security.apc-ndk_platform
+LOCAL_SRC_FILES := $(LOCAL_MODULE).so
+LOCAL_MODULE_CLASS := SHARED_LIBRARIES
+LOCAL_MODULE_SUFFIX := .so
+LOCAL_MODULE_TARGET_ARCH := arm64
+LOCAL_MULTILIB := 64
+LOCAL_MODULE_RELATIVE_PATH :=
+include $(BUILD_PREBUILT)
+
+include $(CLEAR_VARS)
+LOCAL_MODULE := android.system.keystore2-V1-ndk_platform
+LOCAL_SRC_FILES := $(LOCAL_MODULE).so
+LOCAL_MODULE_CLASS := SHARED_LIBRARIES
+LOCAL_MODULE_SUFFIX := .so
+LOCAL_MODULE_TARGET_ARCH := arm64
+LOCAL_MULTILIB := 64
+include $(BUILD_PREBUILT)
+
+include $(CLEAR_VARS)
+LOCAL_MODULE := android.security.authorization-ndk_platform
+LOCAL_SRC_FILES := $(LOCAL_MODULE).so
+LOCAL_MODULE_CLASS := SHARED_LIBRARIES
+LOCAL_MODULE_SUFFIX := .so
+LOCAL_MODULE_TARGET_ARCH := arm64
+LOCAL_MULTILIB := 64
+include $(BUILD_PREBUILT)
+
+include $(CLEAR_VARS)
+LOCAL_MODULE := android.security.maintenance-ndk_platform
+LOCAL_SRC_FILES := android.security.compat-ndk_platform.so
+LOCAL_MODULE_CLASS := SHARED_LIBRARIES
+LOCAL_MODULE_SUFFIX := .so
+LOCAL_MODULE_TARGET_ARCH := arm64
+LOCAL_MULTILIB := 64
+include $(BUILD_PREBUILT)
+
+include $(CLEAR_VARS)
+LOCAL_MODULE := libgatekeeper_aidl
+LOCAL_SRC_FILES := $(LOCAL_MODULE).so
+LOCAL_MODULE_CLASS := SHARED_LIBRARIES
+LOCAL_MODULE_SUFFIX := .so
+LOCAL_MODULE_TARGET_ARCH := arm64
+LOCAL_MULTILIB := 64
+include $(BUILD_PREBUILT)
+EOF
+
+          echo "=== Created prebuilt AIDL module definitions ==="
+          ls -la "$PREBUILT_DIR/"
+          cat "$PREBUILT_DIR/Android.mk"
 
       - name: Build TWRP
         run: |
