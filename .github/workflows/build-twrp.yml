@@ -36,6 +36,9 @@ jobs:
     timeout-minutes: 360
 
     steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
       - name: Free up disk space & create swap
         run: |
           echo "=== Before cleanup ==="
