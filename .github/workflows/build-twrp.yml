@@ -149,81 +149,36 @@ jobs:
           echo "=== Device tree contents ==="
           ls -la device/xiaomi/$DEVICE/
 
+      - name: Create release configs
+        run: |
+          cd ~/twrp
+          mkdir -p build/release/flag_values
+          for REL in ap1a ap2a ap3a ap4a; do
+            printf 'value { name: "RELEASE_ACONFIG_VALUE_SETS" value: "" }\nvalue { name: "RELEASE_HIDDEN_API_EXPORTABLE_STUBS" value: "" }\n' > "build/release/flag_values/${REL}.textproto"
+            echo "Created: ${REL}.textproto"
+          done
+
       - name: Fix libtar AIDL dependency (FBE support)
         run: |
           cd ~/twrp
           echo "=== Setting up prebuilt AIDL libs for FBE ==="
-
           LIBTAR_MK="bootable/recovery/libtar/Android.mk"
-          if [ ! -f "$LIBTAR_MK" ]; then
-            echo "ERROR: $LIBTAR_MK not found"
-            exit 1
-          fi
-
+          if [ ! -f "$LIBTAR_MK" ]; then echo "ERROR: $LIBTAR_MK not found"; exit 1; fi
           PREBUILT_SRC="$GITHUB_WORKSPACE/prebuilt_libs/lib64"
-          if [ ! -d "$PREBUILT_SRC" ]; then
-            echo "WARNING: Prebuilt libs not found, skipping FBE fix"
-            exit 0
-          fi
-
-          # Create prebuilt module directory
+          if [ ! -d "$PREBUILT_SRC" ]; then echo "WARNING: Prebuilt libs not found"; exit 0; fi
           PREBUILT_DIR="device/xiaomi/$DEVICE/prebuilt_aidl"
           mkdir -p "$PREBUILT_DIR"
           cp -v "$PREBUILT_SRC"/*.so "$PREBUILT_DIR/"
-
-          # Create Android.mk for prebuilt AIDL libs
-          cat > "$PREBUILT_DIR/Android.mk" << 'EOF'
-LOCAL_PATH := $(call my-dir)
-
-# Prebuilt AIDL libraries extracted from stock ROM for FBE support
-include $(CLEAR_VARS)
-LOCAL_MODULE := android.security.apc-ndk_platform
-LOCAL_SRC_FILES := $(LOCAL_MODULE).so
-LOCAL_MODULE_CLASS := SHARED_LIBRARIES
-LOCAL_MODULE_SUFFIX := .so
-LOCAL_MODULE_TARGET_ARCH := arm64
-LOCAL_MULTILIB := 64
-LOCAL_MODULE_RELATIVE_PATH :=
-include $(BUILD_PREBUILT)
-
-include $(CLEAR_VARS)
-LOCAL_MODULE := android.system.keystore2-V1-ndk_platform
-LOCAL_SRC_FILES := $(LOCAL_MODULE).so
-LOCAL_MODULE_CLASS := SHARED_LIBRARIES
-LOCAL_MODULE_SUFFIX := .so
-LOCAL_MODULE_TARGET_ARCH := arm64
-LOCAL_MULTILIB := 64
-include $(BUILD_PREBUILT)
-
-include $(CLEAR_VARS)
-LOCAL_MODULE := android.security.authorization-ndk_platform
-LOCAL_SRC_FILES := $(LOCAL_MODULE).so
-LOCAL_MODULE_CLASS := SHARED_LIBRARIES
-LOCAL_MODULE_SUFFIX := .so
-LOCAL_MODULE_TARGET_ARCH := arm64
-LOCAL_MULTILIB := 64
-include $(BUILD_PREBUILT)
-
-include $(CLEAR_VARS)
-LOCAL_MODULE := android.security.maintenance-ndk_platform
-LOCAL_SRC_FILES := android.security.compat-ndk_platform.so
-LOCAL_MODULE_CLASS := SHARED_LIBRARIES
-LOCAL_MODULE_SUFFIX := .so
-LOCAL_MODULE_TARGET_ARCH := arm64
-LOCAL_MULTILIB := 64
-include $(BUILD_PREBUILT)
-
-include $(CLEAR_VARS)
-LOCAL_MODULE := libgatekeeper_aidl
-LOCAL_SRC_FILES := $(LOCAL_MODULE).so
-LOCAL_MODULE_CLASS := SHARED_LIBRARIES
-LOCAL_MODULE_SUFFIX := .so
-LOCAL_MODULE_TARGET_ARCH := arm64
-LOCAL_MULTILIB := 64
-include $(BUILD_PREBUILT)
-EOF
-
-          echo "=== Created prebuilt AIDL module definitions ==="
+          python3 -c "
+libs = ['android.security.apc-ndk_platform', 'android.system.keystore2-V1-ndk_platform', 'android.security.authorization-ndk_platform', 'android.security.maintenance-ndk_platform', 'libgatekeeper_aidl']
+lines = ['LOCAL_PATH := \$(call my-dir)', '']
+for lib in libs:
+    lines += ['include \$(CLEAR_VARS)', 'LOCAL_MODULE := ' + lib, 'LOCAL_SRC_FILES := ' + lib + '.so', 'LOCAL_MODULE_CLASS := SHARED_LIBRARIES', 'LOCAL_MODULE_SUFFIX := .so', 'LOCAL_MODULE_TARGET_ARCH := arm64', 'LOCAL_MULTILIB := 64', 'include \$(BUILD_PREBUILT)', '']
+with open('$PREBUILT_DIR/Android.mk', 'w') as f:
+    f.write('\n'.join(lines))
+print('Created Android.mk')
+"
+          echo "=== Done ==="
           ls -la "$PREBUILT_DIR/"
           cat "$PREBUILT_DIR/Android.mk"
 
