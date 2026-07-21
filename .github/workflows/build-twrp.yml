@@ -36,10 +36,11 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Free up disk space
+      - name: Free up disk space & create swap
         run: |
           echo "=== Before cleanup ==="
           df -h /
+          free -h
           sudo swapoff -a
           sudo rm -f /swapfile
           sudo rm -rf /usr/share/dotnet
@@ -52,8 +53,16 @@ jobs:
           sudo rm -rf /usr/local/share/chromium
           sudo rm -rf /usr/local/lib/node_modules
           sudo apt-get clean
-          echo "=== After cleanup ==="
+
+          # Create 16GB swap file for soong_build OOM prevention
+          echo "=== Creating 16GB swap file ==="
+          sudo fallocate -l 16G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          echo "=== After cleanup + swap ==="
           df -h /
+          free -h
 
       - name: Install build dependencies
         run: |
