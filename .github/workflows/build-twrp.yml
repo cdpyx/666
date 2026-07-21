@@ -90,7 +90,7 @@ jobs:
       - name: Set up ccache
         uses: actions/cache@v4
         with:
-          path: ~/.ccache
+          path: ~/twrp
           key: ccache-twrp-rothko-v2-${{ github.run_number }}
           restore-keys: |
             ccache-twrp-rothko-v2-
@@ -158,32 +158,19 @@ jobs:
             echo "Created: ${REL}.textproto"
           done
 
-      - name: Fix libtar AIDL dependency (FBE support)
+      - name: Fix libtar AIDL dependency
         run: |
           cd ~/twrp
-          echo "=== Setting up prebuilt AIDL libs for FBE ==="
+          echo "=== Patching libtar to remove missing AIDL deps ==="
           LIBTAR_MK="bootable/recovery/libtar/Android.mk"
           if [ ! -f "$LIBTAR_MK" ]; then echo "ERROR: $LIBTAR_MK not found"; exit 1; fi
-          PREBUILT_SRC="$GITHUB_WORKSPACE/prebuilt_libs/lib64"
-          if [ ! -d "$PREBUILT_SRC" ]; then echo "WARNING: Prebuilt libs not found"; exit 0; fi
-          PREBUILT_DIR="device/xiaomi/$DEVICE/prebuilt_aidl"
-          mkdir -p "$PREBUILT_DIR"
-          cp -v "$PREBUILT_SRC"/*.so "$PREBUILT_DIR/"
-          echo "LOCAL_PATH := \$(call my-dir)" > "$PREBUILT_DIR/Android.mk"
-          echo "" >> "$PREBUILT_DIR/Android.mk"
-          for MOD in android.security.apc-ndk_platform android.system.keystore2-V1-ndk_platform android.security.authorization-ndk_platform android.security.maintenance-ndk_platform libgatekeeper_aidl; do
-            echo "include \$(CLEAR_VARS)" >> "$PREBUILT_DIR/Android.mk"
-            echo "LOCAL_MODULE := $MOD" >> "$PREBUILT_DIR/Android.mk"
-            echo "LOCAL_SRC_FILES := $MOD.so" >> "$PREBUILT_DIR/Android.mk"
-            echo "LOCAL_MODULE_CLASS := SHARED_LIBRARIES" >> "$PREBUILT_DIR/Android.mk"
-            echo "LOCAL_MODULE_SUFFIX := .so" >> "$PREBUILT_DIR/Android.mk"
-            echo "LOCAL_MODULE_TARGET_ARCH := arm64" >> "$PREBUILT_DIR/Android.mk"
-            echo "LOCAL_MULTILIB := 64" >> "$PREBUILT_DIR/Android.mk"
-            echo "include \$(BUILD_PREBUILT)" >> "$PREBUILT_DIR/Android.mk"
-            echo "" >> "$PREBUILT_DIR/Android.mk"
-          done
-          echo "=== Created Android.mk ==="
-          cat "$PREBUILT_DIR/Android.mk"
+          sed -i '/android\.security\.apc-ndk_platform/d' "$LIBTAR_MK"
+          sed -i '/android\.system\.keystore2-V1-ndk_platform/d' "$LIBTAR_MK"
+          sed -i '/android\.security\.authorization-ndk_platform/d' "$LIBTAR_MK"
+          sed -i '/android\.security\.maintenance-ndk_platform/d' "$LIBTAR_MK"
+          sed -i '/libgatekeeper_aidl/d' "$LIBTAR_MK"
+          echo "=== Patched ==="
+          grep -c "ndk_platform\|gatekeeper_aidl" "$LIBTAR_MK" && echo "WARNING: some refs remain" || echo "All AIDL refs removed"
 
       - name: Build TWRP
         run: |
